@@ -1,0 +1,101 @@
+{
+  "_note": "Дополнительные дома (многодомность). Дом по умолчанию лежит в house.json и всегда идёт первым. Данные домов и УК модельные (обезличенные), подключение реального дома = новая запись здесь. Квартиры должны делиться на подъезды и этажи нацело (нужно для цифрового двойника). city это код справочника в tariffs.json. managementCompany.id связывает дом с УК: код сотрудника УК (STAFF_CODES) открывает пульт только её домов.",
+  "houses": [
+    {
+      "fiasId": "7c2b1a3e-5d4f-4e8a-9b61-2f0c3d9e8a71",
+      "city": "kzn",
+      "address": "г. Казань, ул. Чистопольская, д. 71",
+      "yearBuilt": 2009,
+      "floors": 10,
+      "entrances": 4,
+      "apartmentsCount": 160,
+      "managementCompany": {
+        "id": "uk-uyutny-dom",
+        "name": "ООО «УК «Уютный дом»»",
+        "phone": "+7 (843) 210-45-45",
+        "emergencyPhone": "+7 (843) 210-00-00",
+        "email": "info@uyutdom.example",
+        "reception": "пн-пт 8:00-17:00"
+      },
+      "elevatorService": {
+        "name": "ООО «Казаньлифт»",
+        "phone": "+7 (843) 555-20-20"
+      },
+      "overhaulPlan": [
+        {
+          "workType": "Замена лифтового оборудования",
+          "plannedYear": 2027,
+          "status": "planned",
+          "budget": 5600000,
+          "progressPercent": 0,
+          "contractor": "определяется НО «ГЖФ при Раисе РТ»",
+          "contractorPhone": ""
+        }
+      ]
+    },
+    {
+      "fiasId": "59d1f52f-a3cc-4525-b6b6-9bff8d2cdc76",
+      "city": "spb",
+      "address": "г. Санкт-Петербург, пр. Науки, д. 25, корп. 2",
+      "yearBuilt": 2005,
+      "floors": 10,
+      "entrances": 4,
+      "apartmentsCount": 160,
+      "managementCompany": {
+        "id": "uk-sev-stolica",
+        "name": "ООО УК «Северная столица»",
+        "phone": "+7 (812) 331-45-10",
+        "emergencyPhone": "+7 (812) 331-00-00",
+        "email": "info@sevstolica.example",
+        "reception": "пн-пт 9:00-18:00"
+      },
+      "elevatorService": {
+        "name": "ООО «ОТИС-Сервис»",
+        "phone": "+7 (812) 320-10-10"
+      },
+      "overhaulPlan": [
+        {
+          "workType": "Ремонт кровли",
+          "plannedYear": 2027,
+          "status": "planned",
+          "budget": 3800000,
+          "progressPercent": 0,
+          "contractor": "не определён",
+          "contractorPhone": ""
+        }
+      ]
+    },
+    {
+      "fiasId": "c3f6fe3e-118f-4417-882d-f8dc3bf76fc5",
+      "city": "spb",
+      "address": "г. Санкт-Петербург, ул. Ленская, д. 8",
+      "yearBuilt": 1979,
+      "floors": 5,
+      "entrances": 6,
+      "apartmentsCount": 120,
+      "managementCompany": {
+        "id": "tsj-lenskaya-8",
+        "name": "ТСЖ «Ленская-8»",
+        "phone": "+7 (812) 588-12-34",
+        "emergencyPhone": "+7 (812) 588-00-00",
+        "email": "tsj@lenskaya8.example",
+        "reception": "вт, чт 17:00-20:00"
+      },
+      "elevatorService": {
+        "name": "без лифта",
+        "phone": ""
+      },
+      "overhaulPlan": [
+        {
+          "workType": "Замена системы отопления",
+          "plannedYear": 2026,
+          "status": "in_progress",
+          "budget": 2100000,
+          "progressPercent": 40,
+          "contractor": "ООО «ТеплоМонтаж»",
+          "contractorPhone": "+7 (812) 700-40-40"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,618 @@
+openapi: 3.0.3
+info:
+  title: MAX ЖКХ «Дом» API
+  version: "0.5.0"
+  description: |
+    REST API мини-приложения и бота «Дом» в MAX. Главный сценарий: авария с фото → пульт
+    диспетчера → оповещение соседей по стояку → статус жителю.
+
+    Аутентификация (одна из):
+    - `X-Max-Init-Data`: launch-параметры MAX (`window.WebApp.initData`), подпись по
+      dev.max.ru/docs/webapps/validation, срок жизни `auth_date` 1 час;
+    - `X-Test-Key` + `X-Test-User`: тестовые жители для автопроверки (`test-resident-1` —
+      Санкт-Петербург, кв. 42; `test-resident-2` — Казань, кв. 12). Роль диспетчера не выдаётся;
+    - `X-Debug-User`: только локальный запуск с `AUTH_DEV=1`.
+
+    Дом и квартира жителя берутся из прописки (`POST /attach`), а не из тела запросов.
+    Без прописки эндпоинты дома возвращают `403 membership_required`.
+servers:
+  - url: https://greatly-bustling-bigeye.cloudpub.ru/api/v1
+    description: Живой стенд
+  - url: http://localhost:3000/api/v1
+    description: Локальный запуск (docker compose up --build)
+security:
+  - maxInitData: []
+  - testKey: []
+components:
+  securitySchemes:
+    maxInitData: { type: apiKey, in: header, name: X-Max-Init-Data }
+    testKey:
+      type: apiKey
+      in: header
+      name: X-Test-Key
+      description: Вместе с заголовком X-Test-User (test-resident-1 | test-resident-2)
+  parameters:
+    TestUser:
+      name: X-Test-User
+      in: header
+      required: false
+      schema: { type: string, enum: [test-resident-1, test-resident-2] }
+    HouseIdQuery:
+      name: houseId
+      in: query
+      required: false
+      schema: { type: string }
+      description: fiasId дома; по умолчанию первый дом, доступный диспетчеру
+  responses:
+    Unauthorized:
+      description: Нет или неверна подпись
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NoMembership:
+      description: Житель не выбрал дом (membership_required) или нет прав (forbidden)
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    BadRequest:
+      description: Ошибка валидации
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    TooMany:
+      description: Слишком много запросов
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, example: membership_required }
+        hint: { type: string }
+    Health:
+      type: object
+      required: [status, version, checks]
+      properties:
+        status: { type: string, example: ok }
+        version: { type: string }
+        service: { type: string }
+        timestamp: { type: string, format: date-time }
+        checks:
+          type: object
+          properties:
+            maxBot: { type: string, enum: [polling, starting_or_failed, disabled] }
+            gigachat: { type: string, enum: [ok, unreachable, no_credentials, checking], description: реальный запрос к GigaChat, результат кэшируется на минуту }
+            auth: { type: string, enum: [max_signature, dev_mode] }
+            tariffs: { type: string }
+            vision: { type: string, enum: [ok, unreachable, no_credentials, checking, demo] }
+            demoMode: { type: boolean }
+            houses: { type: integer }
+            cities: { type: array, items: { type: string } }
+    HouseBrief:
+      type: object
+      required: [fiasId, address, uk, city]
+      properties:
+        fiasId: { type: string }
+        city: { type: string, example: spb }
+        cityName: { type: string, example: Санкт-Петербург }
+        address: { type: string }
+        uk: { type: string }
+        apartmentsCount: { type: integer }
+    House:
+      type: object
+      required: [fiasId, city, address, managementCompany]
+      properties:
+        fiasId: { type: string }
+        city: { type: string }
+        address: { type: string }
+        yearBuilt: { type: integer }
+        floors: { type: integer }
+        entrances: { type: integer }
+        apartmentsCount: { type: integer }
+        managementCompany:
+          type: object
+          properties:
+            name: { type: string }
+            phone: { type: string }
+            emergencyPhone: { type: string }
+            email: { type: string }
+            reception: { type: string }
+        overhaulPlan: { type: array, items: { type: object } }
+    Me:
+      type: object
+      required: [id, role, auth]
+      properties:
+        id: { type: string }
+        auth: { type: string, enum: [max, session, test, dev] }
+        firstName: { type: string, nullable: true }
+        role: { type: string, enum: [resident, dispatcher] }
+        membership:
+          nullable: true
+          type: object
+          properties:
+            houseId: { type: string }
+            apartment: { type: string }
+            consentAt: { type: string, format: date-time }
+        house: { nullable: true, allOf: [{ $ref: '#/components/schemas/HouseBrief' }] }
+        dispatchHouses: { type: array, items: { $ref: '#/components/schemas/HouseBrief' } }
+        staffLoginAvailable: { type: boolean }
+    AttachRequest:
+      type: object
+      required: [houseId, apartment, consent]
+      properties:
+        houseId: { type: string }
+        apartment: { type: string, pattern: '^\d{1,5}$' }
+        consent: { type: boolean, enum: [true] }
+    StatusEvent:
+      type: object
+      properties:
+        status: { $ref: '#/components/schemas/Status' }
+        at: { type: string, format: date-time }
+        by: { type: string }
+        note: { type: string }
+    Status:
+      type: string
+      enum: [new, assigned, in_progress, done, rejected, auto_closed]
+      description: auto_closed ставит только демо-стенд аварии без движения 12 часов
+    ServiceRequest:
+      type: object
+      required: [id, houseId, apartment, category, title, status, priority, slaDeadline, createdAt]
+      properties:
+        id: { type: string, example: MAX-2026-014 }
+        houseId: { type: string }
+        apartment: { type: string }
+        category: { type: string, enum: [emergency, plumbing, electric, elevator, cleaning, other] }
+        title: { type: string }
+        description: { type: string }
+        priority: { type: string, enum: [emergency, normal] }
+        status: { $ref: '#/components/schemas/Status' }
+        assignedMaster: { type: string }
+        slaDeadline: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        hasPhoto: { type: boolean }
+        history: { type: array, items: { $ref: '#/components/schemas/StatusEvent' } }
+        duplicateOf: { type: string, description: 'номер открытой аварии на том же стояке, к которой добавлено сообщение' }
+    TariffItem:
+      type: object
+      properties:
+        name: { type: string }
+        unit: { type: string }
+        rate: { type: number }
+        source: { type: string, description: реквизиты документа }
+        model: { type: boolean, description: true = модельное значение без реквизитов }
+    Tariffs:
+      type: object
+      required: [city, since, until, items]
+      properties:
+        cityCode: { type: string }
+        city: { type: string }
+        since: { type: string, format: date }
+        until: { type: string, format: date }
+        source: { type: string }
+        hasModel: { type: boolean }
+        items: { type: object, additionalProperties: { $ref: '#/components/schemas/TariffItem' } }
+    MetersResult:
+      type: object
+      required: [id, apartment, values, usage, amount]
+      properties:
+        id: { type: string }
+        apartment: { type: string }
+        period: { type: string, example: 2026-09 }
+        values: { type: object, additionalProperties: { type: number } }
+        usage: { type: object, additionalProperties: { type: number } }
+        amount: { type: number }
+        acceptedNow: { type: boolean }
+    BillCheck:
+      type: object
+      required: [tariffs, rows, overchargedTotal]
+      properties:
+        tariffs: { type: object }
+        maintenance: { type: number, nullable: true }
+        rows: { type: array, items: { type: object } }
+        overchargedTotal: { type: number }
+        claimText: { type: string, nullable: true }
+    Vote:
+      type: object
+      required: [id, title, total, counted, quorumNeed, quorum]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        detail: { type: string }
+        deadline: { type: string }
+        total: { type: integer, description: квартир в доме }
+        yes: { type: integer }
+        no: { type: integer }
+        abstain: { type: integer }
+        counted: { type: integer }
+        quorumNeed: { type: integer, description: строго больше половины квартир }
+        quorum: { type: boolean }
+        myChoice: { type: string, nullable: true, description: голос квартиры пользователя }
+        mine: { type: boolean }
+    Incident:
+      type: object
+      properties:
+        id: { type: string }
+        apartment: { type: integer }
+        title: { type: string }
+        status: { $ref: '#/components/schemas/Status' }
+        spot: { type: object, properties: { entrance: { type: integer }, floor: { type: integer }, column: { type: integer } } }
+        zone:
+          type: array
+          items:
+            type: object
+            properties:
+              apartment: { type: integer }
+              floor: { type: integer }
+              relation: { type: string, enum: [source, flood, riser], description: 'source — квартира аварии, flood — 1–2 этажа ниже, riser — остальной стояк' }
+              subscribers: { type: integer }
+        reports: { type: integer, description: 'сколько жителей сообщили об этой аварии' }
+        reportedFrom: { type: array, items: { type: string } }
+        messages: { type: object, properties: { source: { type: string }, flood: { type: string }, riser: { type: string } } }
+        lastNotice: { type: object, nullable: true }
+    Notice:
+      type: object
+      required: [id, incidentId, results]
+      properties:
+        id: { type: string }
+        incidentId: { type: string }
+        houseId: { type: string }
+        sentAt: { type: string, format: date-time }
+        text: { type: string }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              apartment: { type: integer }
+              status: { type: string, enum: [sent, simulated, no_subscriber, failed] }
+              subscribers: { type: integer }
+              delivered: { type: integer }
+paths:
+  /health:
+    get:
+      summary: Статус сервиса и подсистем
+      security: []
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Health' } } } }
+  /houses:
+    get:
+      summary: Подключённые дома (для онбординга)
+      security: []
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/HouseBrief' } } } } }
+  /houses/fias/{fiasId}:
+    get:
+      summary: Дом по ФИАС-идентификатору
+      security: []
+      parameters: [ { name: fiasId, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/House' } } } }
+        "404": { description: Дом не найден, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /houses/{fiasId}/link:
+    get:
+      summary: Диплинк дома для QR в подъезде
+      security: []
+      parameters: [ { name: fiasId, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, required: [link, qr], properties: { link: { type: string }, qr: { type: string }, poster: { type: string } } }
+        "404": { description: Дом не найден }
+  /houses/{fiasId}/qr.svg:
+    get:
+      summary: QR-код диплинка дома (SVG)
+      security: []
+      parameters: [ { name: fiasId, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: SVG, content: { image/svg+xml: { schema: { type: string } } } }
+        "404": { description: Дом не найден }
+  /tariffs:
+    get:
+      summary: Тарифы города на дату (периоды 2026 года переключаются сами)
+      security: []
+      parameters:
+        - { name: city, in: query, required: false, schema: { type: string, enum: [spb, kzn], default: spb } }
+        - { name: date, in: query, required: false, schema: { type: string, format: date } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Tariffs' } } } }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "404": { description: Нет справочника для города, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /categories:
+    get:
+      summary: Категории заявок и сроки реакции (SLA)
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { type: object, required: [key, label, slaMinutes], properties: { key: { type: string }, label: { type: string }, slaMinutes: { type: integer } } } }
+  /address/suggest:
+    get:
+      summary: Подсказки адресов из ФИАС/ГАР (DaData, ключ на сервере)
+      parameters:
+        - { $ref: '#/components/parameters/TestUser' }
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 3 } }
+      responses:
+        "200":
+          description: Подсказки (source = dadata | off)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, source]
+                properties:
+                  source: { type: string, enum: [dadata, off] }
+                  items: { type: array, items: { type: object, properties: { value: { type: string }, fiasId: { type: string }, connected: { type: boolean } } } }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "502": { description: DaData недоступна }
+  /me:
+    get:
+      summary: Кто я — роль, прописка, дома пульта
+      parameters: [ { $ref: '#/components/parameters/TestUser' } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+  /attach:
+    post:
+      summary: Прописка в доме и квартире (с согласием на обработку ПДн)
+      parameters: [ { $ref: '#/components/parameters/TestUser' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AttachRequest' } } }
+      responses:
+        "201":
+          description: Привязано
+          content:
+            application/json:
+              schema: { type: object, required: [ok, membership], properties: { ok: { type: boolean }, membership: { type: object }, house: { $ref: '#/components/schemas/HouseBrief' } } }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "404": { description: Дом не найден }
+  /house:
+    get:
+      summary: Дом жителя (по прописке)
+      parameters: [ { $ref: '#/components/parameters/TestUser' } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/House' } } } }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/NoMembership' }
+  /staff/login:
+    post:
+      summary: Вход сотрудника УК по коду приглашения (роль диспетчера для дома прописки)
+      parameters: [ { $ref: '#/components/parameters/TestUser' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [code], properties: { code: { type: string } } } } }
+      responses:
+        "201": { description: Роль выдана }
+        "403": { description: Неверный код или тестовый пользователь, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "429": { $ref: '#/components/responses/TooMany' }
+  /requests:
+    get:
+      summary: Мои заявки в моём доме (с историей статусов)
+      parameters: [ { $ref: '#/components/parameters/TestUser' } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ServiceRequest' } } } } }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/NoMembership' }
+    post:
+      summary: Создать заявку. Квартира и дом из прописки; emergency сразу появляется на пульте
+      parameters: [ { $ref: '#/components/parameters/TestUser' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category, description]
+              properties:
+                category: { type: string, enum: [emergency, plumbing, electric, elevator, cleaning, other] }
+                description: { type: string, minLength: 5 }
+                title: { type: string }
+                hasPhoto: { type: boolean }
+      responses:
+        "201": { description: Создана, content: { application/json: { schema: { $ref: '#/components/schemas/ServiceRequest' } } } }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/NoMembership' }
+        "429": { $ref: '#/components/responses/TooMany' }
+  /requests/{id}:
+    get:
+      summary: Заявка (своя или своего дома для диспетчера)
+      parameters:
+        - { $ref: '#/components/parameters/TestUser' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ServiceRequest' } } } }
+        "404": { description: Нет такой заявки или нет доступа }
+    patch:
+      summary: Сменить статус (диспетчер дома). Житель получает сообщение от бота в MAX
+      parameters:
+        - { $ref: '#/components/parameters/TestUser' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [assigned, in_progress, done, rejected] }
+                note: { type: string, description: комментарий жителю }
+                master: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { request: { $ref: '#/components/schemas/ServiceRequest' }, residentNotified: { type: boolean } } }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "403": { description: Не диспетчер этого дома, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "404": { description: Нет такой заявки }
+        "409": { description: Недопустимый переход статуса }
+  /meters/last:
+    get:
+      summary: Мои последние показания (только свои)
+      parameters: [ { $ref: '#/components/parameters/TestUser' } ]
+      responses:
+        "200": { description: OK (values = null, если передач не было), content: { application/json: { schema: { type: object, properties: { values: { type: object, nullable: true } } } } } }
+        "403": { $ref: '#/components/responses/NoMembership' }
+  /meters:
+    post:
+      summary: Передать показания. previous учитывается только при первой передаче
+      parameters: [ { $ref: '#/components/parameters/TestUser' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [values]
+              properties:
+                values: { type: object, additionalProperties: { type: number }, example: { cold: 145.2, hot: 98.7, power: 14382 } }
+                previous: { type: object, additionalProperties: { type: number } }
+      responses:
+        "201": { description: Принято, content: { application/json: { schema: { $ref: '#/components/schemas/MetersResult' } } } }
+        "400": { description: less_than_previous, unknown_meter, bad_value, values_required, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        "403": { $ref: '#/components/responses/NoMembership' }
+  /bill/check:
+    post:
+      summary: Сверка квитанции с тарифом города дома
+      parameters: [ { $ref: '#/components/parameters/TestUser' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lines]
+              properties:
+                area: { type: number }
+                lines: { type: array, maxItems: 20, items: { type: object, properties: { key: { type: string }, volume: { type: number }, charged: { type: number } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/BillCheck' } } } }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "403": { $ref: '#/components/responses/NoMembership' }
+  /votes:
+    get:
+      summary: Опросы моего дома
+      parameters: [ { $ref: '#/components/parameters/TestUser' } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Vote' } } } } }
+        "403": { $ref: '#/components/responses/NoMembership' }
+    post:
+      summary: Предложить опрос по своему дому
+      parameters: [ { $ref: '#/components/parameters/TestUser' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [title], properties: { title: { type: string, minLength: 5 }, detail: { type: string }, deadline: { type: string } } } } }
+      responses:
+        "201": { description: Создан, content: { application/json: { schema: { $ref: '#/components/schemas/Vote' } } } }
+        "400": { $ref: '#/components/responses/BadRequest' }
+  /votes/{id}:
+    post:
+      summary: Голос квартиры (один с квартиры, только опросы своего дома)
+      parameters:
+        - { $ref: '#/components/parameters/TestUser' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [choice], properties: { choice: { type: string, enum: [yes, no, abstain] } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Vote' } } } }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "404": { description: Нет такого опроса в доме пользователя }
+  /assistant:
+    post:
+      summary: Вопрос ассистенту (GigaChat, ответ только из базы знаний; без ключа — база знаний)
+      parameters: [ { $ref: '#/components/parameters/TestUser' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [text], properties: { text: { type: string } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, required: [answer], properties: { answer: { type: string } } } } } }
+  /ai/scan:
+    post:
+      summary: AI-сканер фото (счётчик или авария), GigaChat Vision; при DEMO_MODE без ключа — заготовка с source=demo
+      parameters: [ { $ref: '#/components/parameters/TestUser' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode, image]
+              properties:
+                mode: { type: string, enum: [meter, incident] }
+                image: { type: string, description: base64 JPEG/PNG/WebP, до ~4.5 МБ }
+      responses:
+        "200": { description: Результат распознавания (source = live | demo) }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "413": { description: Слишком большое фото }
+        "429": { $ref: '#/components/responses/TooMany' }
+        "502": { description: GigaChat недоступен }
+        "503": { description: Распознавание не настроено }
+  /dispatch/state:
+    get:
+      summary: Пульт — активные аварии на схеме подъезда и открытые заявки дома (диспетчер)
+      parameters: [ { $ref: '#/components/parameters/HouseIdQuery' } ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  houseId: { type: string }
+                  address: { type: string }
+                  layout: { type: object, nullable: true }
+                  incidents: { type: array, items: { $ref: '#/components/schemas/Incident' } }
+                  requests: { type: array, items: { type: object } }
+                  demoMode: { type: boolean }
+                  botActive: { type: boolean }
+        "403": { description: Не диспетчер или чужой дом }
+  /dispatch/notify:
+    post:
+      summary: Оповестить соседей по стояку (адресаты — прописанные в квартирах зоны риска)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [incidentId], properties: { incidentId: { type: string }, houseId: { type: string } } } } }
+      responses:
+        "201": { description: Результат по квартирам, content: { application/json: { schema: { $ref: '#/components/schemas/Notice' } } } }
+        "403": { description: Не диспетчер или чужой дом }
+        "404": { description: Авария не найдена или закрыта }
+  /dispatch/outage:
+    post:
+      summary: Плановое отключение — предупредить жителей дома, подъезда или стояка (диспетчер)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [utility, scope, from, to]
+              properties:
+                houseId: { type: string }
+                utility: { type: string, enum: [cold, hot, power, heat] }
+                scope: { type: string, enum: [house, entrance, riser] }
+                entrance: { type: integer, description: 'для scope=entrance' }
+                apartment: { type: integer, description: 'любая квартира стояка, для scope=riser' }
+                from: { type: string, format: date-time }
+                to: { type: string, format: date-time }
+                reason: { type: string }
+      responses:
+        "201":
+          description: Отправлено
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  text: { type: string }
+                  apartments: { type: integer }
+                  recipients: { type: integer }
+                  delivered: { type: integer }
+                  simulated: { type: boolean }
+        "400": { description: bad_period, bad_utility, bad_scope, bad_entrance, bad_apartment }
+        "403": { description: Не диспетчер или чужой дом }

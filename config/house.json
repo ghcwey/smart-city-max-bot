@@ -1,0 +1,41 @@
+{
+  "fiasId": "c637718a-3358-4dd6-ad87-e2dabf2bebe9",
+  "city": "spb",
+  "address": "г. Санкт-Петербург, ул. Типанова, д. 12, корп. 1",
+  "yearBuilt": 1988,
+  "floors": 9,
+  "entrances": 3,
+  "apartmentsCount": 108,
+  "managementCompany": {
+    "id": "uk-umny-dom",
+    "name": "ООО УК «Умный дом»",
+    "phone": "+7 (812) 299-11-22",
+    "emergencyPhone": "+7 (812) 299-00-00",
+    "email": "uk@smart-house.example",
+    "reception": "пн-чт 9:00-18:00, пт 9:00-17:00"
+  },
+  "elevatorService": {
+    "name": "ООО «ЛифтСервис»",
+    "phone": "+7 (812) 277-22-11"
+  },
+  "overhaulPlan": [
+    {
+      "workType": "Замена 2 пассажирских лифтов",
+      "plannedYear": 2026,
+      "status": "in_progress",
+      "budget": 6400000,
+      "progressPercent": 75,
+      "contractor": "ООО «ЛифтСервис»",
+      "contractorPhone": "+7 (812) 277-22-11"
+    },
+    {
+      "workType": "Ремонт фасада и цоколя",
+      "plannedYear": 2028,
+      "status": "planned",
+      "budget": 4200000,
+      "progressPercent": 0,
+      "contractor": "не определён",
+      "contractorPhone": ""
+    }
+  ]
+}

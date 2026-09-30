@@ -1,0 +1,33 @@
+{
+  "name": "max-zhkh",
+  "version": "0.5.3",
+  "private": true,
+  "description": "MAX bot + mini-app: emergency in the building -> dispatcher -> riser alert -> status to resident (hackathon MVP)",
+  "type": "module",
+  "scripts": {
+    "dev": "npm run build:app && tsx watch src/server.ts",
+    "start": "npm run build:app && tsx src/server.ts",
+    "build:app": "node scripts/build-miniapp.mjs",
+    "typecheck": "tsc --noEmit",
+    "check:api": "node scripts/api-check.mjs",
+    "check:auth": "tsx scripts/auth-check.ts",
+    "check:ui": "node scripts/smoke-ui.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "qrcode": "^1.5.4",
+    "undici": "^8.10.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/qrcode": "^1.5.6",
+    "esbuild": "^0.28.2",
+    "jsdom": "^30.1.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

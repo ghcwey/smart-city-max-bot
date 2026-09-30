@@ -1,0 +1,250 @@
+# Перечень обязательных проверок API для автоматизированной оценки платформой.
+# Структура по кейсу (стр. 10): версия, решение, базовый адрес, проверки с методом, путём,
+# параметрами, ролью, ожидаемыми кодами и форматом ответа.
+#
+# !!! ВАЖНО ДЛЯ ПРОВЕРЯЮЩИХ: ${TEST_API_KEY} ниже — плейсхолдер, а не значение.
+# Значение ключа указано на СЛУЖЕБНОМ (первом) СЛАЙДЕ ПРЕЗЕНТАЦИИ в строке «TEST_API_KEY».
+# В репозитории его нет по правилам хакатона (рабочие ключи в репозитории запрещены).
+# Ключ даёт только двух тестовых жителей с заранее заданной пропиской и никогда не даёт роль диспетчера.
+# Без ключа роль anonymous проходит проверки health, houses, categories, tariffs_kzn, unauthorized.
+# Локально (docker compose up --build без .env) ключ равен local-test-key.
+# Тестовые жители прописаны заранее, поэтому проверки не зависят от порядка и повторяемы:
+#   test-resident-1 — Санкт-Петербург, ул. Типанова, 12 к.1, кв. 42
+#   test-resident-2 — Казань, ул. Чистопольская, 71, кв. 12
+# Роль диспетчера тестовому ключу не выдаётся (проверка requests_patch_forbidden).
+
+version: "1.0"
+solution: "max-zhkh-dom"
+team: "t305"
+
+baseUrl: "https://greatly-bustling-bigeye.cloudpub.ru/api/v1"
+# локально: http://localhost:3000/api/v1 (docker compose up --build, ключ по умолчанию local-test-key)
+
+roles:
+  anonymous: {}
+  resident:
+    headers:
+      X-Test-Key: "${TEST_API_KEY}"
+      X-Test-User: "test-resident-1"
+  resident_kazan:
+    headers:
+      X-Test-Key: "${TEST_API_KEY}"
+      X-Test-User: "test-resident-2"
+
+checks:
+  # --- служебные и справочники ---
+  - name: health
+    description: Статус сервиса и подсистем
+    method: GET
+    path: /health
+    role: anonymous
+    expect:
+      status: [200]
+      contentType: application/json
+      requiredFields: [status, version, checks]
+
+  - name: houses_list
+    description: Подключённые дома (два города)
+    method: GET
+    path: /houses
+    role: anonymous
+    expect:
+      status: [200]
+      contentType: application/json
+      body:
+        type: array
+        itemRequiredFields: [fiasId, address, uk, city]
+
+  - name: categories
+    description: Категории заявок и SLA
+    method: GET
+    path: /categories
+    role: anonymous
+    expect:
+      status: [200]
+      contentType: application/json
+      body:
+        type: array
+        itemRequiredFields: [key, label, slaMinutes]
+
+  - name: tariffs_kzn
+    description: Тарифы Казани с реквизитами и периодом действия
+    method: GET
+    path: /tariffs
+    query: { city: kzn }
+    role: anonymous
+    expect:
+      status: [200]
+      contentType: application/json
+      requiredFields: [city, since, until, items]
+
+  - name: unauthorized
+    description: Без подписи MAX или тестового ключа доступа нет
+    method: GET
+    path: /me
+    role: anonymous
+    expect:
+      status: [401]
+      contentType: application/json
+      requiredFields: [error]
+
+  # --- житель: прописка ---
+  - name: me
+    description: Роль и прописка тестового жителя
+    method: GET
+    path: /me
+    role: resident
+    expect:
+      status: [200]
+      contentType: application/json
+      requiredFields: [id, role, membership]
+
+  - name: attach
+    description: Прописка с согласием на обработку ПДн (повторяемо)
+    method: POST
+    path: /attach
+    role: resident
+    headers: { Content-Type: application/json }
+    body: { houseId: "c637718a-3358-4dd6-ad87-e2dabf2bebe9", apartment: "42", consent: true }
+    expect:
+      status: [201]
+      contentType: application/json
+      requiredFields: [ok, membership]
+
+  - name: attach_requires_consent
+    description: Без согласия привязка отклоняется
+    method: POST
+    path: /attach
+    role: resident
+    headers: { Content-Type: application/json }
+    body: { houseId: "c637718a-3358-4dd6-ad87-e2dabf2bebe9", apartment: "42", consent: false }
+    expect:
+      status: [400]
+      contentType: application/json
+      requiredFields: [error]
+
+  - name: house
+    description: Дом жителя по прописке
+    method: GET
+    path: /house
+    role: resident
+    expect:
+      status: [200]
+      contentType: application/json
+      requiredFields: [fiasId, address, managementCompany]
+
+  # --- основной сценарий: аварийная заявка и её статус ---
+  - name: request_create_emergency
+    description: Аварийная заявка; квартира и дом берутся из прописки (заявки тестовых жителей на пульт диспетчера не выводятся)
+    method: POST
+    path: /requests
+    role: resident
+    headers: { Content-Type: application/json }
+    body: { category: emergency, description: "Течёт стояк горячей воды в ванной, вода на полу", title: "Течь стояка ГВС" }
+    expect:
+      status: [201]
+      contentType: application/json
+      requiredFields: [id, status, priority, apartment, slaDeadline, history]
+
+  - name: request_validation
+    description: Слишком короткое описание отклоняется
+    method: POST
+    path: /requests
+    role: resident
+    headers: { Content-Type: application/json }
+    body: { category: emergency, description: "ой" }
+    expect:
+      status: [400]
+      contentType: application/json
+      requiredFields: [error]
+
+  - name: requests_list
+    description: Свои заявки со статусом и историей
+    method: GET
+    path: /requests
+    role: resident
+    expect:
+      status: [200]
+      contentType: application/json
+      body:
+        type: array
+        itemRequiredFields: [id, status, history]
+
+  - name: requests_patch_forbidden
+    description: Житель не может менять статус, это делает диспетчер УК
+    method: PATCH
+    path: /requests/MAX-2026-001
+    role: resident
+    headers: { Content-Type: application/json }
+    body: { status: done }
+    expect:
+      status: [403]
+      contentType: application/json
+      requiredFields: [error]
+
+  - name: dispatch_forbidden
+    description: Пульт диспетчера закрыт для жителя
+    method: GET
+    path: /dispatch/state
+    role: resident
+    expect:
+      status: [403]
+      contentType: application/json
+      requiredFields: [error]
+
+  # --- дополнительные сценарии ---
+  - name: meters_submit
+    description: Показания счётчиков (повторная передача тех же чисел даёт расход 0)
+    method: POST
+    path: /meters
+    role: resident
+    headers: { Content-Type: application/json }
+    body: { values: { cold: 145.2, hot: 98.7, power: 14382 }, previous: { cold: 140, hot: 95, power: 14200 } }
+    expect:
+      status: [201]
+      contentType: application/json
+      requiredFields: [id, values, usage, amount]
+
+  - name: meters_last
+    description: Последние показания только самого жителя
+    method: GET
+    path: /meters/last
+    role: resident
+    expect:
+      status: [200]
+      contentType: application/json
+      requiredFields: [values]
+
+  - name: bill_check_kazan
+    description: Сверка квитанции по тарифам города дома (Казань)
+    method: POST
+    path: /bill/check
+    role: resident_kazan
+    headers: { Content-Type: application/json }
+    body: { area: 54, lines: [ { key: cold, volume: 5, charged: 300 } ] }
+    expect:
+      status: [200]
+      contentType: application/json
+      requiredFields: [tariffs, rows, overchargedTotal]
+
+  - name: votes
+    description: Опросы своего дома с кворумом
+    method: GET
+    path: /votes
+    role: resident
+    expect:
+      status: [200]
+      contentType: application/json
+      body: { type: array }
+
+  - name: assistant
+    description: Ответ ассистента из базы знаний
+    method: POST
+    path: /assistant
+    role: resident
+    headers: { Content-Type: application/json }
+    body: { text: "Что делать, если прорвало трубу?" }
+    expect:
+      status: [200]
+      contentType: application/json
+      requiredFields: [answer]
